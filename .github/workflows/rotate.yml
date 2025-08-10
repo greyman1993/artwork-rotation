@@ -1,144 +1,39 @@
-name: Rotate Artworks
 
-on:
-  schedule:
-    # Every Sunday at 00:05 UTC
-    - cron: "5 0 * * 0"
-  workflow_dispatch:
-    inputs:
-      dry:
-        description: "Dry run? (true/false)"
-        required: false
-        default: "false"
-      total_target:
-        description: "Override total target (int)"
-        required: false
-      calligraphy_target:
-        description: "Override calligraphy target (int)"
-        required: false
+The function writes to `public.rotation_log` so you can audit each rotation.
 
-# Prevent overlapping runs
-concurrency:
-  group: artwork-rotation
-  cancel-in-progress: false
+---
 
-permissions:
-  contents: read
+## One-time setup
 
-jobs:
-  rotate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      SUPABASE_URL: https://ucqrljgpbpnqmwezmfbg.supabase.co
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+1) **GitHub Secrets** (Settings → Secrets and variables → Actions)  
+   - `SUPABASE_SERVICE_ROLE_KEY` (service role key from Supabase → Project Settings → API)  
+   - `TOTAL_TARGET` (optional)  
+   - `CALLIGRAPHY_TARGET` (optional)
 
-    steps:
-      - name: Verify secrets present
-        run: |
-          if [ -z "${SUPABASE_SERVICE_ROLE_KEY}" ]; then
-            echo "❌ Missing SUPABASE_SERVICE_ROLE_KEY secret" >&2
-            exit 1
-          fi
+2) **Workflow file**  
+   Located at `.github/workflows/rotate.yml` (includes retries, summaries, and concurrency).
 
-      - name: Ensure jq is available
-        run: |
-          if ! command -v jq >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y jq
-          fi
+---
 
-      - name: Resolve inputs & defaults
-        id: vars
-        shell: bash
-        run: |
-          INPUT_DRY="${{ github.event.inputs.dry }}"
-          INPUT_TOTAL="${{ github.event.inputs.total_target }}"
-          INPUT_CALLI="${{ github.event.inputs.calligraphy_target }}"
+## Manual runs (GitHub Actions)
 
-          SECRET_TOTAL="${{ secrets.TOTAL_TARGET }}"
-          SECRET_CALLI="${{ secrets.CALLIGRAPHY_TARGET }}"
+1. Go to **Actions → Rotate Artworks → Run workflow**.  
+2. Inputs:
+   - `dry`: `"true"` for a safe test, `"false"` for a live rotation.
+   - `total_target`, `calligraphy_target`: leave blank to use secrets/defaults.
+3. Open the run → **Summary** shows parameters, JSON payload, HTTP status, and the Supabase response body.
 
-          if [ -z "${INPUT_DRY}" ]; then DRY=false; else DRY="${INPUT_DRY}"; fi
-          TOTAL_TARGET="${INPUT_TOTAL:-${SECRET_TOTAL}}"
-          CALLIGRAPHY_TARGET="${INPUT_CALLI:-${SECRET_CALLI}}"
-          if [ -z "${TOTAL_TARGET}" ]; then TOTAL_TARGET=70; fi
-          if [ -z "${CALLIGRAPHY_TARGET}" ]; then CALLIGRAPHY_TARGET=5; fi
+---
 
-          echo "dry=${DRY}" >> "$GITHUB_OUTPUT"
-          echo "total=${TOTAL_TARGET}" >> "$GITHUB_OUTPUT"
-          echo "calli=${CALLIGRAPHY_TARGET}" >> "$GITHUB_OUTPUT"
+## Verify in Supabase
 
-          {
-            echo "### Artwork Rotation — Parameters"
-            echo ""
-            echo "- **dry**: \`${DRY}\`"
-            echo "- **total_target**: \`${TOTAL_TARGET}\`"
-            echo "- **calligraphy_target**: \`${CALLIGRAPHY_TARGET}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+Run in **SQL Editor**:
 
-      - name: Build JSON payload
-        id: payload
-        run: |
-          # Build compact, single-line JSON for outputs
-          PAYLOAD="$(jq -c -n \
-            --argjson dry "${{ steps.vars.outputs.dry }}" \
-            --argjson total "${{ steps.vars.outputs.total }}" \
-            --argjson calli "${{ steps.vars.outputs.calli }}" \
-            '{dry: $dry, total_target: $total, calligraphy_target: $calli}')"
-
-          # Safely set the output
-          {
-            echo 'payload<<EOF'
-            echo "${PAYLOAD}"
-            echo 'EOF'
-          } >> "$GITHUB_OUTPUT"
-
-          # Human-friendly pretty JSON in the summary
-          {
-            echo ""
-            echo "### JSON Payload"
-            echo ""
-            echo '```json'
-            echo "${PAYLOAD}" | jq .
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Call rotate_artworks via Supabase REST
-        id: call
-        env:
-          PAYLOAD: ${{ steps.payload.outputs.payload }}
-        run: |
-          set -euo pipefail
-          HTTP_BODY="$(mktemp)"
-          HTTP_CODE=$(
-            curl -sS -X POST "${SUPABASE_URL}/rest/v1/rpc/rotate_artworks" \
-              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
-              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
-              -H "Content-Type: application/json" \
-              --data "${PAYLOAD}" \
-              --retry 5 --retry-delay 2 --retry-connrefused \
-              -w "%{http_code}" -o "${HTTP_BODY}"
-          ) || true
-
-          echo "status=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
-
-          {
-            echo ""
-            echo "### Supabase Response"
-            echo ""
-            echo "- **HTTP status**: \`${HTTP_CODE}\`"
-            echo ""
-            echo "<details><summary>Body</summary>"
-            echo ""
-            echo '```json'
-            cat "${HTTP_BODY}" || true
-            echo '```'
-            echo ""
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          case "${HTTP_CODE}" in
-            200|201|204) echo "Call succeeded." ;;
-            *) echo "❌ Supabase call failed with status ${HTTP_CODE}" >&2; exit 1 ;;
-          esac
+```sql
+-- Live runs only
+select ran_at, dry, before_visible, after_visible,
+       unarchive_calligraphy_ids, unarchive_other_ids, archive_ids
+from public.rotation_log
+where dry = false
+order by ran_at desc, id desc
+limit 10;
