@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      SUPABASE_URL: https://ucqrljgpbpqmwmzemfbg.supabase.co
+      SUPABASE_URL: https://ucqrljgpbpnqmwezmfbg.supabase.co
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
@@ -59,9 +59,7 @@ jobs:
           SECRET_TOTAL="${{ secrets.TOTAL_TARGET }}"
           SECRET_CALLI="${{ secrets.CALLIGRAPHY_TARGET }}"
 
-          # Default to live=false only for manual dry runs; scheduled runs stay false by default
           if [ -z "${INPUT_DRY}" ]; then DRY=false; else DRY="${INPUT_DRY}"; fi
-
           TOTAL_TARGET="${INPUT_TOTAL:-${SECRET_TOTAL}}"
           CALLIGRAPHY_TARGET="${INPUT_CALLI:-${SECRET_CALLI}}"
           if [ -z "${TOTAL_TARGET}" ]; then TOTAL_TARGET=70; fi
