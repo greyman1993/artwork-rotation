@@ -1,26 +1,16 @@
-name: Rotate Artworks
+# Artwork Rotation (Supabase + GitHub Actions)
 
-on:
-  schedule:
-    # Every Sunday at 00:05 UTC (change if you want)
-    - cron: "5 0 * * 0"
-  workflow_dispatch: {}  # allow manual run from the Actions tab
+Automates rotating which artworks are visible in your Supabase database by calling the `rotate_artworks` RPC on a schedule (and on-demand).
 
-jobs:
-  rotate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+- Live runs by default on schedule (`dry=false`)
+- Manual runs with a `dry` toggle
+- Sensible defaults for targets (via GitHub Secrets or hardcoded fallbacks)
+- Clear run summaries and cURL retries
+- No overlapping jobs (concurrency)
 
-    env:
-      SUPABASE_URL: https://ucqrljgpbpnqmwezmfbg.supabase.co
-      TOTAL_TARGET: ${{ secrets.TOTAL_TARGET || 70 }}
-      CALLIGRAPHY_TARGET: ${{ secrets.CALLIGRAPHY_TARGET || 5 }}
+---
 
-    steps:
-      - name: Call rotate_artworks via Supabase REST (safe + simple)
-        run: |
-          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rotate_artworks" \
-            -H "apikey: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"dry\": false, \"total_target\": ${TOTAL_TARGET}, \"calligraphy_target\": ${CALLIGRAPHY_TARGET} }"
+## How it works
+
+A GitHub Actions workflow at `.github/workflows/rotate.yml` calls your Supabase RPC:
+
