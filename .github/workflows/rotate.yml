@@ -2,25 +2,122 @@ name: Rotate Artworks
 
 on:
   schedule:
-    # Every Sunday at 00:05 UTC (change if you want)
-    - cron: "5 0 * * 0"
-  workflow_dispatch: {}  # allow manual run from the Actions tab
+    - cron: "5 0 * * 0" # Sunday 00:05 UTC
+  workflow_dispatch:
+    inputs:
+      dry:
+        description: "Dry run? (true/false)"
+        required: false
+        default: "false"
+      total_target:
+        description: "Override total target (int)"
+        required: false
+      calligraphy_target:
+        description: "Override calligraphy target (int)"
+        required: false
+
+concurrency:
+  group: artwork-rotation
+  cancel-in-progress: false
+
+permissions:
+  contents: read
 
 jobs:
   rotate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
     env:
-      SUPABASE_URL: https://ucqrljgbppnqmwezmfbg.supabase.co
-      TOTAL_TARGET: ${{ secrets.TOTAL_TARGET || 70 }}
-      CALLIGRAPHY_TARGET: ${{ secrets.CALLIGRAPHY_TARGET || 5 }}
+      SUPABASE_URL: https://ucqrljgpbpqmwmzemfbg.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
-      - name: Call rotate_artworks via Supabase REST (safe + simple)
+      - name: Verify secrets present
         run: |
-          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rotate_artworks" \
-            -H "apikey: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d "{\"dry\": false, \"total_target\": ${TOTAL_TARGET}, \"calligraphy_target\": ${CALLIGRAPHY_TARGET} }"
+          if [ -z "${SUPABASE_SERVICE_ROLE_KEY}" ]; then
+            echo "❌ Missing SUPABASE_SERVICE_ROLE_KEY secret" >&2
+            exit 1
+          fi
+
+      - name: Ensure jq is available
+        run: |
+          if ! command -v jq >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      - name: Resolve inputs & defaults
+        id: vars
+        shell: bash
+        run: |
+          INPUT_DRY="${{ github.event.inputs.dry }}"
+          INPUT_TOTAL="${{ github.event.inputs.total_target }}"
+          INPUT_CALLI="${{ github.event.inputs.calligraphy_target }}"
+
+          SECRET_TOTAL="${{ secrets.TOTAL_TARGET }}"
+          SECRET_CALLI="${{ secrets.CALLIGRAPHY_TARGET }}"
+
+          if [ -z "${INPUT_DRY}" ]; then DRY=false; else DRY="${INPUT_DRY}"; fi
+          TOTAL_TARGET="${INPUT_TOTAL:-${SECRET_TOTAL}}"
+          CALLIGRAPHY_TARGET="${INPUT_CALLI:-${SECRET_CALLI}}"
+          if [ -z "${TOTAL_TARGET}" ]; then TOTAL_TARGET=70; fi
+          if [ -z "${CALLIGRAPHY_TARGET}" ]; then CALLIGRAPHY_TARGET=5; fi
+
+          echo "dry=${DRY}" >> "$GITHUB_OUTPUT"
+          echo "total=${TOTAL_TARGET}" >> "$GITHUB_OUTPUT"
+          echo "calli=${CALLIGRAPHY_TARGET}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Artwork Rotation — Parameters"
+            echo "- **dry**: \`${DRY}\`"
+            echo "- **total_target**: \`${TOTAL_TARGET}\`"
+            echo "- **calligraphy_target**: \`${CALLIGRAPHY_TARGET}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build JSON payload
+        id: payload
+        run: |
+          PAYLOAD="$(jq -n \
+            --argjson dry "${{ steps.vars.outputs.dry }}" \
+            --argjson total "${{ steps.vars.outputs.total }}" \
+            --argjson calli "${{ steps.vars.outputs.calli }}" \
+            '{dry: $dry, total_target: $total, calligraphy_target: $calli}')"
+          echo "payload=${PAYLOAD}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### JSON Payload"
+            echo '```json'
+            echo "${PAYLOAD}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Call rotate_artworks via Supabase REST
+        id: call
+        env:
+          PAYLOAD: ${{ steps.payload.outputs.payload }}
+        run: |
+          set -euo pipefail
+          HTTP_BODY="$(mktemp)"
+          HTTP_CODE=$(
+            curl -sS -X POST "${SUPABASE_URL}/rest/v1/rpc/rotate_artworks" \
+              -H "apikey: ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+              -H "Content-Type: application/json" \
+              --data "${PAYLOAD}" \
+              --retry 5 --retry-delay 2 --retry-connrefused \
+              -w "%{http_code}" -o "${HTTP_BODY}"
+          ) || true
+
+          echo "status=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Supabase Response"
+            echo "- **HTTP status**: \`${HTTP_CODE}\`"
+            echo "<details><summary>Body</summary>"
+            echo '```json'; cat "${HTTP_BODY}" || true; echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          case "${HTTP_CODE}" in
+            200|201|204) echo "Call succeeded." ;;
+            *) echo "❌ Supabase call failed with status ${HTTP_CODE}" >&2; exit 1 ;;
+          esac
