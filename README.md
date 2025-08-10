@@ -1,1 +1,26 @@
-# artwork-rotation
+name: Rotate Artworks
+
+on:
+  schedule:
+    # Every Sunday at 00:05 UTC (change if you want)
+    - cron: "5 0 * * 0"
+  workflow_dispatch: {}  # allow manual run from the Actions tab
+
+jobs:
+  rotate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      SUPABASE_URL: https://ucqrljgpbpnqmwezmfbg.supabase.co
+      TOTAL_TARGET: ${{ secrets.TOTAL_TARGET || 70 }}
+      CALLIGRAPHY_TARGET: ${{ secrets.CALLIGRAPHY_TARGET || 5 }}
+
+    steps:
+      - name: Call rotate_artworks via Supabase REST (safe + simple)
+        run: |
+          curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/rotate_artworks" \
+            -H "apikey: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"dry\": false, \"total_target\": ${TOTAL_TARGET}, \"calligraphy_target\": ${CALLIGRAPHY_TARGET} }"
