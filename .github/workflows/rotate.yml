@@ -2,7 +2,8 @@ name: Rotate Artworks
 
 on:
   schedule:
-    - cron: "5 0 * * 0" # Sunday 00:05 UTC
+    # Every Sunday at 00:05 UTC
+    - cron: "5 0 * * 0"
   workflow_dispatch:
     inputs:
       dry:
@@ -16,6 +17,7 @@ on:
         description: "Override calligraphy target (int)"
         required: false
 
+# Prevent overlapping runs
 concurrency:
   group: artwork-rotation
   cancel-in-progress: false
@@ -57,7 +59,9 @@ jobs:
           SECRET_TOTAL="${{ secrets.TOTAL_TARGET }}"
           SECRET_CALLI="${{ secrets.CALLIGRAPHY_TARGET }}"
 
+          # Default to live=false only for manual dry runs; scheduled runs stay false by default
           if [ -z "${INPUT_DRY}" ]; then DRY=false; else DRY="${INPUT_DRY}"; fi
+
           TOTAL_TARGET="${INPUT_TOTAL:-${SECRET_TOTAL}}"
           CALLIGRAPHY_TARGET="${INPUT_CALLI:-${SECRET_CALLI}}"
           if [ -z "${TOTAL_TARGET}" ]; then TOTAL_TARGET=70; fi
@@ -69,6 +73,7 @@ jobs:
 
           {
             echo "### Artwork Rotation — Parameters"
+            echo ""
             echo "- **dry**: \`${DRY}\`"
             echo "- **total_target**: \`${TOTAL_TARGET}\`"
             echo "- **calligraphy_target**: \`${CALLIGRAPHY_TARGET}\`"
@@ -77,16 +82,27 @@ jobs:
       - name: Build JSON payload
         id: payload
         run: |
-          PAYLOAD="$(jq -n \
+          # Build compact, single-line JSON for outputs
+          PAYLOAD="$(jq -c -n \
             --argjson dry "${{ steps.vars.outputs.dry }}" \
             --argjson total "${{ steps.vars.outputs.total }}" \
             --argjson calli "${{ steps.vars.outputs.calli }}" \
             '{dry: $dry, total_target: $total, calligraphy_target: $calli}')"
-          echo "payload=${PAYLOAD}" >> "$GITHUB_OUTPUT"
+
+          # Safely set the output
           {
-            echo "### JSON Payload"
-            echo '```json'
+            echo 'payload<<EOF'
             echo "${PAYLOAD}"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+          # Human-friendly pretty JSON in the summary
+          {
+            echo ""
+            echo "### JSON Payload"
+            echo ""
+            echo '```json'
+            echo "${PAYLOAD}" | jq .
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -110,10 +126,17 @@ jobs:
           echo "status=${HTTP_CODE}" >> "$GITHUB_OUTPUT"
 
           {
+            echo ""
             echo "### Supabase Response"
+            echo ""
             echo "- **HTTP status**: \`${HTTP_CODE}\`"
+            echo ""
             echo "<details><summary>Body</summary>"
-            echo '```json'; cat "${HTTP_BODY}" || true; echo '```'
+            echo ""
+            echo '```json'
+            cat "${HTTP_BODY}" || true
+            echo '```'
+            echo ""
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
 
